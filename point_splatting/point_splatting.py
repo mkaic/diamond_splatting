@@ -2,7 +2,8 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import math
-import torchvision.transforms.functional as F
+import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 
 
 class Points(nn.Module):
@@ -18,6 +19,8 @@ class Points(nn.Module):
 
         self.minimum_width = -1 * self.width_to_height_ratio
         self.maximum_width = 1 * self.width_to_height_ratio
+        self.minimum_height = -1
+        self.maximum_height = 1
 
         locations_y = torch.rand(1, 1, num_points, device=self.device) * 2 - 1
         locations_x = (
@@ -31,42 +34,24 @@ class Points(nn.Module):
             )  # Shape: (1, 1, num_points, 2)
         )  # relative to canvas size
 
-        # Initialize 2D transformation matrices with random rotations
-        random_angles = (
-            torch.rand(num_points, device=self.device, dtype=torch.float32)
-            * 2
-            * torch.pi
-        )
-        rotation_matrices = torch.stack(
-            [
-                torch.cos(random_angles),
-                -torch.sin(random_angles),
-                torch.sin(random_angles),
-                torch.cos(random_angles),
-            ],
-            dim=-1,
-        ).view(num_points, 2, 2)
         self.matrix_offsets = nn.Parameter(
-            rotation_matrices.detach()
-            - torch.eye(2, device=self.device, dtype=torch.float32)
+            torch.randn(num_points, 2, 2, device=self.device, dtype=torch.float32) * 2
         )
-        self.matrix_scale_factor_offsets = nn.Parameter(
+
+        self.matrix_scale_exponents = nn.Parameter(
             torch.zeros(num_points, 1, 1, device=self.device, dtype=torch.float32)
         )
         self.colors = nn.Parameter(
-            torch.rand(1, 1, num_points, 3, device=self.device)
+            torch.zeros(1, 1, num_points, 3, device=self.device, dtype=torch.float32)
         )  # Values to add or subtract from each channel of the canvas.
-        self.alphas = nn.Parameter(
-            torch.zeros(1, 1, num_points, 1, device=self.device, dtype=torch.float32)
-        )
 
-    def render(self, canvas_height: int, canvas_width: int) -> Tensor:
+    def render(self, canvas_height_px: int, canvas_width_px: int) -> Tensor:
         """
         Render points on a canvas.
 
         Args:
-            canvas_height (int): Height of the canvas.
-            canvas_width (int): Width of the canvas.
+            canvas_height_px (int): Height of the canvas in pixels.
+            canvas_width_px (int): Width of the canvas in pixels.
 
         Returns:
             Tensor: A tensor representing the rendered points on the canvas.
@@ -74,12 +59,16 @@ class Points(nn.Module):
 
         untransformed_coordinates = torch.meshgrid(
             torch.linspace(
-                -1, 1, canvas_height, dtype=torch.float32, device=self.device
+                self.minimum_height,
+                self.maximum_height,
+                canvas_height_px,
+                dtype=torch.float32,
+                device=self.device,
             ),
             torch.linspace(
                 self.minimum_width,
                 self.maximum_width,
-                canvas_width,
+                canvas_width_px,
                 dtype=torch.float32,
                 device=self.device,
             ),
@@ -106,34 +95,34 @@ class Points(nn.Module):
         ) * (
             math.sqrt(self.num_points)
             / 2  # the /2 is bc the canvas is 2 units wide (-1 to 1)
-        ) * (
-            torch.exp(self.matrix_scale_factor_offsets)
+        ) / (
+            torch.exp(self.matrix_scale_exponents)
         )
-        transform_matrices = transform_matrices.view(1, 1, num_points, 2, 2)
+        transform_matrices = transform_matrices.view(1, 1, self.num_points, 2, 2)
         transformed_coordinates = torch.matmul(
             shifted_coordinates, transform_matrices
         ).squeeze(
             -2
         )  # (H, W, num_points, 2)
 
-        # distances = torch.mean(torch.abs(transformed_coordinates), dim=-1, keepdim=True)
+        distances = torch.mean(torch.abs(transformed_coordinates), dim=-1, keepdim=True)
 
         # distances = torch.sqrt(
         #     torch.sum(transformed_coordinates**2, dim=-1, keepdim=True)
         # )
 
-        distances = torch.sum(
-            torch.square(transformed_coordinates), dim=-1, keepdim=True
-        )
+        # distances = torch.sum(
+        #     torch.square(transformed_coordinates), dim=-1, keepdim=True
+        # )
 
         mapped_distances = torch.relu(1 - distances)
 
-        canvas = self.colors * self.alphas * mapped_distances
+        canvas = self.colors * mapped_distances
 
         canvas = canvas.sum(dim=-2)  # (H, W, 3)
         canvas = torch.sigmoid(canvas * 4)
 
-        return canvas
+        return canvas.permute(2, 0, 1)  # Change from (H, W, C) to (C, H, W)
 
 
 def scale_then_crop(image: Tensor, desired_height: int, desired_width: int):
@@ -154,74 +143,88 @@ def scale_then_crop(image: Tensor, desired_height: int, desired_width: int):
         # Scale height to desired_height
         scale_factor = desired_height / H
         new_width = int(round(W * scale_factor))
-        resized = F.resize(image, (desired_height, new_width))
+        resized = TF.resize(image, (desired_height, new_width))
         # Crop width to desired_width
-        cropped = F.center_crop(resized, (desired_height, desired_width))
+        cropped = TF.center_crop(resized, (desired_height, desired_width))
     else:
         # Scale width to desired_width (also handles H == W)
         scale_factor = desired_width / W
         new_height = int(round(H * scale_factor))
-        resized = F.resize(image, (new_height, desired_width))
+        resized = TF.resize(image, (new_height, desired_width))
         # Crop height to desired_height
-        cropped = F.center_crop(resized, (desired_height, desired_width))
+        cropped = TF.center_crop(resized, (desired_height, desired_width))
 
     return cropped
 
 
-if __name__ == "__main__":
-    device = torch.device("mps")
-    from PIL import Image
-    from torch.optim import Adam, SGD
-    import numpy as np
-    from pathlib import Path
-    from tqdm import tqdm
+def sobol_filter(image: Tensor) -> Tensor:
+    """
+    Applies a Sobel filter for edge detection on an input image tensor.
 
-    canvas_height = 192
-    canvas_width = 128
-    num_points = 512
+    This function accepts an image in CHW format and applies the Sobel operator separately to
+    each channel using group convolution. It computes the gradient in the x and y directions,
+    calculates the gradient magnitude, and clamps the results to the range [0.0, 1.0].
+    This approach maintains the color information by processing each channel independently.
 
-    # Ensure the output directory exists
-    output_dir = Path("outputs")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    Parameters:
+        image (torch.Tensor): A tensor representing the image in CHW format (Channels x Height x Width).
 
-    target_image = Image.open("monalisa.jpg").convert("RGB")
-    target_image = F.to_tensor(target_image)  # Add batch dimension
+    Returns:
+        torch.Tensor: A tensor in CHW format containing the edge-detected image
+                      with gradient magnitudes in each channel.
+    """
+    # Assume image is in CHW format.
+    # Add batch dimension: shape (1, C, H, W)
+    image_unsqueezed = image.unsqueeze(0)
+    C = image.shape[0]
+    device = image.device
 
-    target_image = scale_then_crop(
-        target_image, canvas_height, canvas_width
-    )  # Resize and crop to desired size
-    target_image = target_image.permute(1, 2, 0)  # (Height, Width, Channels)
-    target_image = target_image.to(device)
-
-    points = Points(
-        num_points=num_points,
-        canvas_height=canvas_height,
-        canvas_width=canvas_width,
+    # Define Sobel kernels for x and y directions.
+    base_sobel_x = torch.tensor(
+        [[1.0, 0.0, -1.0], [2.0, 0.0, -2.0], [1.0, 0.0, -1.0]],
         device=device,
+        dtype=torch.float32,
     )
-    points.train()
+    base_sobel_y = torch.tensor(
+        [[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [-1.0, -2.0, -1.0]],
+        device=device,
+        dtype=torch.float32,
+    )
 
-    optimizer = Adam(points.parameters(), lr=0.001, betas=(0.9, 0.99))
-    num_iterations = 10_000
-    pbar = tqdm(range(num_iterations), desc="Loss: 0.0000")
-    for i in pbar:
-        optimizer.zero_grad()
-        canvas = points.render(canvas_height, canvas_width)
-        recon_l2_loss = torch.nn.functional.mse_loss(canvas, target_image)
+    # Expand the kernels to apply them separately on each channel using groups convolution.
+    sobel_x = base_sobel_x.view(1, 1, 3, 3).repeat(C, 1, 1, 1)
+    sobel_y = base_sobel_y.view(1, 1, 3, 3).repeat(C, 1, 1, 1)
 
-        # ratio of scales should be close to 1 (log of ratio should be close to 0)
-        # reg_loss = torch.mean(
-        #     torch.abs(torch.log((points.scales[..., 0] / points.scales[..., 1])))
-        # )
-        total_loss = recon_l2_loss
-        total_loss.backward()
-        optimizer.step()
-        pbar.set_description(f"L2 Loss: {recon_l2_loss.item():.6f}")
+    # Apply convolution using groups equal to number of channels.
+    grad_x = F.conv2d(
+        image_unsqueezed,
+        sobel_x,
+        padding=1,
+        groups=C,
+    )
+    grad_y = F.conv2d(
+        image_unsqueezed,
+        sobel_y,
+        padding=1,
+        groups=C,
+    )
 
-        if i % 100 == 0:
-            canvas = canvas.detach().cpu()
-            canvas = canvas * 255
-            canvas = canvas.numpy().astype(np.uint8)
-            image = Image.fromarray(canvas)
-            image.save(f"outputs/{i:05d}.png")
-            image.save(f"latest.png")
+    # Compute gradient magnitude.
+    grad_magnitude = (torch.abs(grad_x) + torch.abs(grad_y)) / 2
+
+    # Remove batch dimension.
+    edge_image = grad_magnitude.squeeze(0)  # shape (C, H, W)
+    return edge_image
+
+
+def float_to_uint8(image: Tensor) -> Tensor:
+    """
+    Convert a float tensor image to uint8 format.
+
+    Args:
+        image (Tensor): Input image tensor of shape (C, H, W) with values in [0, 1].
+
+    Returns:
+        Tensor: Converted image tensor of shape (C, H, W) with values in [0, 255].
+    """
+    return (image.detach().cpu() * 255.0).clamp(0, 255).to(torch.uint8)

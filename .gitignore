@@ -2,3 +2,4 @@ output.png
 latest.png
 outputs
 .DS_Store
+__pycache__
