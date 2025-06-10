@@ -108,7 +108,7 @@ class Points(nn.Module):
         distances = torch.mean(torch.abs(transformed_coordinates), dim=-1, keepdim=True)
 
         # distances = torch.sqrt(
-        #     torch.sum(transformed_coordinates**2, dim=-1, keepdim=True)
+        #     torch.sum(torch.square(transformed_coordinates), dim=-1, keepdim=True)
         # )
 
         # distances = torch.sum(
@@ -180,15 +180,21 @@ def sobol_filter(image: Tensor) -> Tensor:
     device = image.device
 
     # Define Sobel kernels for x and y directions.
-    base_sobel_x = torch.tensor(
-        [[1.0, 0.0, -1.0], [2.0, 0.0, -2.0], [1.0, 0.0, -1.0]],
-        device=device,
-        dtype=torch.float32,
+    base_sobel_x = (
+        torch.tensor(
+            [[1.0, 0.0, -1.0], [2.0, 0.0, -2.0], [1.0, 0.0, -1.0]],
+            device=device,
+            dtype=torch.float32,
+        )
+        / 4
     )
-    base_sobel_y = torch.tensor(
-        [[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [-1.0, -2.0, -1.0]],
-        device=device,
-        dtype=torch.float32,
+    base_sobel_y = (
+        torch.tensor(
+            [[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [-1.0, -2.0, -1.0]],
+            device=device,
+            dtype=torch.float32,
+        )
+        / 4
     )
 
     # Expand the kernels to apply them separately on each channel using groups convolution.

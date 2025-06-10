@@ -3,3 +3,9 @@ latest.png
 outputs
 .DS_Store
 __pycache__
+*.jpg
+*.png
+
+!branos.jpg
+!monalisa.jpg
+!latest.png
