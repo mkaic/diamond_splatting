@@ -10,13 +10,19 @@ from torchvision.io import write_png, write_jpeg
 import shutil
 
 
-device = torch.device("mps")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 
 CANVAS_HEIGHT_PX = 384
 CANVAS_WIDTH_PX = 256
-NUM_POINTS = 128
+NUM_POINTS = 2048
 NUM_ITERATIONS = 8192
 IMAGE = "monalisa.jpg"  # Path to the target image
+TIMELAPSE = True
 
 # Ensure the output directory exists
 output_dir = Path("outputs")
@@ -84,44 +90,44 @@ for i in pbar:
         steps_since_last_save = 0
         last_saved_loss = total_loss.item()
 
-        top = torch.cat(
-            (
-                float_to_uint8(target_image),
-                float_to_uint8(canvas),
-            ),
-            dim=2,
-        )
-        center = torch.cat(
-            (
-                float_to_uint8(target_grad),
-                float_to_uint8(canvas_grad),
-            ),
-            dim=2,
-        )
-        bottom = torch.cat(
-            (
-                float_to_uint8(target_double_grad),
-                float_to_uint8(canvas_double_grad),
-            ),
-            dim=2,
-        )
-        # right = torch.cat(
-        #     (
-        #         float_to_uint8(torch.abs(target_image - canvas)),
-        #         float_to_uint8(
-        #             torch.abs(target_grad - canvas_grad),
-        #         ),
-        #         float_to_uint8(
-        #             torch.abs(target_double_grad - canvas_double_grad),
-        #         ),
-        #     ),
-        #     dim=1,
-        # )
-        combined = torch.cat((top, center, bottom), dim=1)
+        if TIMELAPSE:
+            top = torch.cat(
+                (
+                    float_to_uint8(target_image),
+                    float_to_uint8(canvas),
+                ),
+                dim=2,
+            )
+            center = torch.cat(
+                (
+                    float_to_uint8(target_grad),
+                    float_to_uint8(canvas_grad),
+                ),
+                dim=2,
+            )
+            bottom = torch.cat(
+                (
+                    float_to_uint8(target_double_grad),
+                    float_to_uint8(canvas_double_grad),
+                ),
+                dim=2,
+            )
+            # right = torch.cat(
+            #     (
+            #         float_to_uint8(torch.abs(target_image - canvas)),
+            #         float_to_uint8(
+            #             torch.abs(target_grad - canvas_grad),
+            #         ),
+            #         float_to_uint8(
+            #             torch.abs(target_double_grad - canvas_double_grad),
+            #         ),
+            #     ),
+            #     dim=1,
+            # )
+            combined = torch.cat((top, center, bottom), dim=1)
 
-        write_png(top, f"outputs/{improvements:05d}.png")
-        write_png(combined, f"latest.png")
-        write_png(float_to_uint8(canvas), f"canvas_latest.png")
+            write_jpeg(top, f"outputs/{improvements:05d}.jpg")
+            write_png(combined, f"latest.png")
 
     else:
         steps_since_last_save += 1

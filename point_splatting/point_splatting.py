@@ -45,6 +45,7 @@ class Points(nn.Module):
             torch.zeros(1, 1, num_points, 3, device=self.device, dtype=torch.float32)
         )  # Values to add or subtract from each channel of the canvas.
 
+    @torch.compile(disable=not torch.cuda.is_available())
     def render(self, canvas_height_px: int, canvas_width_px: int) -> Tensor:
         """
         Render points on a canvas.
