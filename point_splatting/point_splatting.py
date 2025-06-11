@@ -41,6 +41,9 @@ class Points(nn.Module):
         self.matrix_scale_exponents = nn.Parameter(
             torch.zeros(num_points, 1, 1, device=self.device, dtype=torch.float32)
         )
+        self.distance_exponents = nn.Parameter(
+            torch.ones(1, 1, num_points, 1, device=self.device, dtype=torch.float32)
+        )
         self.colors = nn.Parameter(
             torch.zeros(1, 1, num_points, 3, device=self.device, dtype=torch.float32)
         )  # Values to add or subtract from each channel of the canvas.
@@ -106,17 +109,20 @@ class Points(nn.Module):
             -2
         )  # (H, W, num_points, 2)
 
-        distances = torch.mean(torch.abs(transformed_coordinates), dim=-1, keepdim=True)
+        # distances = torch.mean(torch.abs(transformed_coordinates), dim=-1, keepdim=True)
 
-        # distances = torch.sqrt(
-        #     torch.sum(torch.square(transformed_coordinates), dim=-1, keepdim=True)
-        # )
+        distances = torch.sum(
+            torch.square(transformed_coordinates), dim=-1, keepdim=True
+        )
 
-        # distances = torch.sum(
-        #     torch.square(transformed_coordinates), dim=-1, keepdim=True
-        # )
-
-        mapped_distances = torch.relu(1 - distances)
+        # mapped_distances = F.relu(1 - distances)
+        # mapped_distances = 1 / (1 + distances)
+        mapped_distances = 1 / (
+            1
+            + torch.pow(
+                distances, torch.clamp(self.distance_exponents, min=0.2, max=5.0)
+            )
+        )
 
         canvas = self.colors * mapped_distances
 

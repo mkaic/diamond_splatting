@@ -17,10 +17,10 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-CANVAS_HEIGHT_PX = 384
-CANVAS_WIDTH_PX = 256
-NUM_POINTS = 2048
-NUM_ITERATIONS = 8192
+CANVAS_HEIGHT_PX = 192
+CANVAS_WIDTH_PX = 128
+NUM_POINTS = 1024
+NUM_ITERATIONS = 4096
 IMAGE = "monalisa.jpg"  # Path to the target image
 TIMELAPSE = True
 
